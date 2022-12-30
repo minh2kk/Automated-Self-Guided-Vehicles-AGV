@@ -1,0 +1,2133 @@
+#include "stm32f4xx.h"                  // Device header
+
+#include "mfrc522.h"
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include "cJson.h"
+#include "filter.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
+#include "semphr.h"
+
+#include "tm_stm32f4_servo.h"
+
+volatile float _random, _sin, random_LPF_HPF, random_kalman, signal_LPF, signal_HPF, signal_kalman[11];
+#define PI 3.141592653589793f
+uint8_t ucHeap[ configTOTAL_HEAP_SIZE ];
+/*
+
+//GLCD
+#define KS0108_PORT_DATA  GPIOA
+#define KS0108_PORT_CONTROL  GPIOB
+
+#define KS0108_RS    GPIO_Pin_10
+#define KS0108_RW    GPIO_Pin_11
+#define KS0108_EN    GPIO_Pin_12
+
+#define KS0108_CS1   GPIO_Pin_13
+#define KS0108_CS2   GPIO_Pin_14
+#define KS0108_CS3   GPIO_Pin_15
+
+#define KS0108_D0    0
+
+#define DISPLAY_STATUS_BUSY	0x80
+extern unsigned char screen_x;
+extern unsigned char screen_y;
+
+GPIO_InitTypeDef GPIO_InitStructure;
+//-------------------------------------------------------------------------------------------------
+// Delay function /for 8MHz/
+//-------------------------------------------------------------------------------------------------
+void GLCD_Delay(void)
+{
+  __asm("nop");__asm("nop");__asm("nop");__asm("nop");
+}
+//-------------------------------------------------------------------------------------------------
+// Enalbe Controller (0-2)
+//-------------------------------------------------------------------------------------------------
+void GLCD_EnableController(unsigned char controller)
+{
+switch(controller){
+	case 0 : GPIO_ResetBits(KS0108_PORT_CONTROL, KS0108_CS1); break;
+	case 1 : GPIO_ResetBits(KS0108_PORT_CONTROL, KS0108_CS2); break;
+	case 2 : GPIO_ResetBits(KS0108_PORT_CONTROL, KS0108_CS3); break;
+	}
+}
+//-------------------------------------------------------------------------------------------------
+// Disable Controller (0-2)
+//-------------------------------------------------------------------------------------------------
+void GLCD_DisableController(unsigned char controller)
+{
+switch(controller){
+	case 0 : GPIO_SetBits(KS0108_PORT_CONTROL, KS0108_CS1); break;
+	case 1 : GPIO_SetBits(KS0108_PORT_CONTROL, KS0108_CS2); break;
+	case 2 : GPIO_SetBits(KS0108_PORT_CONTROL, KS0108_CS3); break;
+	}
+}
+//-------------------------------------------------------------------------------------------------
+// Read Status byte from specified controller (0-2)
+//-------------------------------------------------------------------------------------------------
+unsigned char GLCD_ReadStatus(unsigned char controller)
+{
+  unsigned char status;
+
+  GPIO_StructInit(&GPIO_InitStructure);
+  GPIO_InitStructure.GPIO_Pin = 0xFF << KS0108_D0;
+  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IPU;
+  GPIO_Init(KS0108_PORT_DATA, &GPIO_InitStructure);
+
+  GPIO_SetBits(KS0108_PORT_CONTROL, KS0108_RW);
+  GPIO_ResetBits(KS0108_PORT_CONTROL, KS0108_RS);
+  GLCD_EnableController(controller);
+  GLCD_Delay();
+  GPIO_SetBits(KS0108_PORT_CONTROL, KS0108_EN);
+  GLCD_Delay();
+  status = ((GPIO_ReadInputData(KS0108_PORT_DATA) >> KS0108_D0) & 0xFF);
+  GPIO_ResetBits(KS0108_PORT_CONTROL, KS0108_EN);
+  GLCD_DisableController(controller);
+  return status;
+}
+//-------------------------------------------------------------------------------------------------
+// Write command to specified controller
+//-------------------------------------------------------------------------------------------------
+void GLCD_WriteCommand(unsigned char commandToWrite, unsigned char controller)
+{
+  while(GLCD_ReadStatus(controller)&DISPLAY_STATUS_BUSY);
+  
+  GPIO_StructInit(&GPIO_InitStructure);
+  GPIO_InitStructure.GPIO_Pin  = (0xFF << KS0108_D0);
+  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
+  GPIO_Init(KS0108_PORT_DATA, &GPIO_InitStructure);
+
+  GPIO_ResetBits(KS0108_PORT_CONTROL, KS0108_RS | KS0108_RW);
+  GLCD_Delay();
+  GLCD_EnableController(controller);
+  GLCD_Delay();
+  GPIO_SetBits(KS0108_PORT_DATA, (commandToWrite << KS0108_D0));
+  commandToWrite ^= 0xFF;
+  GPIO_ResetBits(KS0108_PORT_DATA, (commandToWrite << KS0108_D0));
+  GLCD_Delay();
+  GPIO_SetBits(KS0108_PORT_CONTROL, KS0108_EN);
+  GLCD_Delay();
+  GPIO_ResetBits(KS0108_PORT_CONTROL, KS0108_EN);
+  GLCD_Delay();
+  GLCD_DisableController(controller);
+}
+
+//-------------------------------------------------------------------------------------------------
+// Read data from current position
+//-------------------------------------------------------------------------------------------------
+unsigned char GLCD_ReadData(void)
+{
+  unsigned char tmp;
+  while(GLCD_ReadStatus(screen_x / 64)&DISPLAY_STATUS_BUSY);
+  
+  GPIO_StructInit(&GPIO_InitStructure);  
+  GPIO_InitStructure.GPIO_Pin = 0xFF << KS0108_D0;
+  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IPU;
+  GPIO_Init(KS0108_PORT_DATA, &GPIO_InitStructure);
+
+  GPIO_SetBits(KS0108_PORT_CONTROL, KS0108_RS | KS0108_RW);
+
+  GLCD_EnableController(screen_x / 64);
+  GLCD_Delay();
+  GPIO_SetBits(KS0108_PORT_CONTROL, KS0108_EN);
+  GLCD_Delay();
+  tmp = ((GPIO_ReadInputData(KS0108_PORT_DATA) >> KS0108_D0) & 0xFF);
+  GPIO_ResetBits(KS0108_PORT_CONTROL, KS0108_EN);
+  GLCD_DisableController(screen_x / 64);
+  screen_x++;
+  return tmp;
+}
+//-------------------------------------------------------------------------------------------------
+// Write data to current position
+//-------------------------------------------------------------------------------------------------
+void GLCD_WriteData(unsigned char dataToWrite)
+{
+  while(GLCD_ReadStatus(screen_x / 64)&DISPLAY_STATUS_BUSY); 
+  
+  GPIO_StructInit(&GPIO_InitStructure);
+  GPIO_InitStructure.GPIO_Pin = (0xFF << KS0108_D0);
+  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
+  GPIO_Init(KS0108_PORT_DATA, &GPIO_InitStructure);
+
+  GPIO_ResetBits(KS0108_PORT_CONTROL, KS0108_RW);
+  GLCD_Delay();
+  GPIO_SetBits(KS0108_PORT_CONTROL, KS0108_RS);
+  GLCD_Delay();
+  GPIO_SetBits(KS0108_PORT_DATA, (dataToWrite << KS0108_D0));
+  dataToWrite ^= 0xFF;
+  GPIO_ResetBits(KS0108_PORT_DATA, (dataToWrite << KS0108_D0));
+  GLCD_Delay();
+  GLCD_EnableController(screen_x / 64);
+  GLCD_Delay();
+  GPIO_SetBits(KS0108_PORT_CONTROL, KS0108_EN);
+  GLCD_Delay();
+  GPIO_ResetBits(KS0108_PORT_CONTROL, KS0108_EN);
+  GLCD_Delay();
+  GLCD_DisableController(screen_x / 64);
+  screen_x++;
+}
+//-------------------------------------------------------------------------------------------------
+//
+//-------------------------------------------------------------------------------------------------
+void GLCD_InitalizePorts(void)
+{
+	GPIO_InitTypeDef            GPIO_InitStructure;
+  RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOE, ENABLE);
+	
+	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOB, ENABLE);
+	
+	GPIO_InitStructure.GPIO_Pin   =  GPIO_Pin_0|GPIO_Pin_1|GPIO_Pin_2|GPIO_Pin_3|GPIO_Pin_4|GPIO_Pin_5|GPIO_Pin_6|GPIO_Pin_7;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;
+	GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;
+	GPIO_InitStructure.GPIO_Speed = GPIO_High_Speed;
+	GPIO_Init(GPIOB, &GPIO_InitStructure);
+	
+  
+  GPIO_InitStructure.GPIO_Pin   =  KS0108_RS|KS0108_RW|KS0108_EN|KS0108_CS1|KS0108_CS2|KS0108_CS3;
+  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;
+	GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;
+	GPIO_InitStructure.GPIO_Speed = GPIO_High_Speed;
+  GPIO_Init(KS0108_PORT_CONTROL, &GPIO_InitStructure);
+  
+  GPIO_Write(KS0108_PORT_DATA, (0xFF<<KS0108_D0));
+  GPIO_Write(KS0108_PORT_CONTROL, KS0108_CS1 | KS0108_CS2 | KS0108_CS3 | KS0108_RS | KS0108_RW);
+}
+//-------------------------------------------------------------------------------------------------
+//
+//-------------------------------------------------------------------------------------------------
+unsigned char GLCD_ReadByteFromROMMemory(char * ptr)
+{
+  return *(ptr);
+}
+
+*/
+///////////////CONFIGUARATION//////////////////////////////
+void RCC_Setup(void);
+void ROBOT_Init(void);
+
+
+
+//1:huong trai, 0:tai tram xuat phat 	2: huong phai
+uint8_t huong0 = 0;
+//0:AUTO	1:MANUAL
+uint8_t mode = 0;
+uint8_t stop = 0;
+uint8_t RFID_CONTROLER = 0;
+uint8_t bdRaKhoiHome = 0;
+char hientai[10] = "22061B34";
+char batdau[10] = "B3B595AC";
+char ketthuc[10] = "838F94AC";
+long bd_kt = 78;
+void HuongRaHome(void);
+void HuongvaoHome(void);
+void HuongAUTO(void);
+cJSON *quan_ly_data;
+char receive;
+char buff[200];
+char minh_json[200];
+char temp_json[200];
+unsigned int buff_index = 0 ;
+void USART_Puts(USART_TypeDef* USARTx, char* str);
+void Usart_Cofig(void);
+void xu_ly_json(char* datajson);
+
+void Read64Block( void);
+void UARTmain_Init(void);
+
+void TIMER13_Init(void);
+void delay(uint16_t timedl);
+void delay_us(uint16_t timedlus);
+
+void HCSR04_Init(void);
+void HCSR_GetDistance(uint16_t* distance);
+uint16_t dis = 0;
+/////////////////////////////////////////////
+
+
+/*RC522*/
+//char szBuff[16];
+//uchar CardID[MAX_LEN];
+//uchar status;
+uint8_t status; uint8_t g_ucTempbuf[20];
+bool flag_loop=0;
+uint8_t CardID[5];
+char buffer[15];
+uint8_t defaultKeyA[16] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+/*RC522*/
+
+
+int so = 0;
+///////////////END RTOS//////////////////////////////
+__IO uint16_t RxData[11];
+__IO uint16_t RxData1[11];
+uint16_t Temp_ADC_t[11] = {0};
+uint16_t Temp_ADC_d[11] = {0};
+uint16_t Temp_ADC[11] = {0};
+//									0		1			2			3		  4			5			6			7			8		 9		10		
+uint16_t TB[11] = {600, 350, 600, 550, 280, 1600, 2800, 2660, 2500, 1560, 2100};
+//uint16_t TB[11] = {1090, 550, 750, 970, 1110, 1960, 3520, 1570, 1980, 1080, 1390};
+uint32_t data_line = 0;
+uint16_t TB_ADC[11] = {0};
+signed int out_line = 0;
+int PWM_Value = 0;
+int PWM_Value_old = 0;
+uint8_t max_speed = 83;
+
+//float kp = 2;
+//float kd = 415;
+//float ki = 0.000004;
+float kp = 1;
+float kd = 4.5;
+float ki = 0.0000005f;
+float Target = 500;
+int Actual=0;
+float Error = 0;
+float ErrorOld;
+float ErrorChange;
+float ErrorSlope;
+float ErrorArea = 0;
+volatile long left = 0;
+volatile long right = 0;
+char R0[11] = "22061B34";
+char R1[11] = "D3F7ECAB";
+char R2[11] = "C3E449AD";
+char R3[11] = "63D3A1AC";
+char R4[11] = "830D9EAC";
+char R5[11] = "B35435AD";
+char R6[11] = "236F4EAD";
+char R7[11] = "B3B595AC";
+char R8[11] = "838F94AC";
+char R9[11] = "53ED3DAD";
+char R10[11] = "5328FBAC";
+uint8_t mangDiChuyen1[2] = {'0', '0'};
+uint8_t mangDiChuyen2[2] = {'1', '1'};
+int huong = 1;  //     0: Ben trai vi tri xuat phat   1: Tai vi tri xuat phat   2: Ben phai vi tri xuat phat
+
+
+
+
+void ADC_READ(void){
+	int i = 0, j = 0;
+	for(i=0;i<11;i++) RxData[i] = 0;
+	for(j = 0; j < 10; j++){
+		for(i=0;i<11;i++){
+			ADC1->SQR3 |= ((i+1)<<0);
+			ADC1->SR = 0;
+			ADC1->CR2 |= (uint32_t)ADC_CR2_SWSTART;
+			while(!(ADC1->SR&ADC_SR_EOC)){}
+			RxData[i]+= ADC1->DR;
+		}
+	}
+	for(i=0;i<11;i++) RxData[i] = RxData[i]/10;
+	
+}
+
+
+void filter(void){
+//	static float x = 0;
+//	_sin = sin(x)*1000;
+//	x += 2*PI/1000;
+//	_random = (float)rand()/1000000;
+//	random_LPF_HPF = _random + _sin;
+//	signal_LPF = LPF(random_LPF_HPF,1,1000);
+//	signal_HPF = HPF(random_LPF_HPF,10,1000);
+//	random_kalman = (float)rand()/1000000;
+	
+	kalman_signal((uint16_t*)RxData, (uint16_t*)RxData1, 500, 10);
+//	RxData1[0] = kalman_signal1(RxData[0], 500, 10);
+//	RxData1[1] = kalman_signal2(RxData[1], 500, 10);
+//	RxData1[2] = kalman_signal3(RxData[2], 500, 10);
+//	RxData1[3] = kalman_signal4(RxData[3], 500, 10);
+//	RxData1[4] = kalman_signal5(RxData[4], 500, 10);
+//	RxData1[5] = kalman_signal6(RxData[5], 500, 10);
+//	RxData1[6] = kalman_signal7(RxData[6], 500, 10);
+//	RxData1[7] = kalman_signal8(RxData[7], 500, 10);
+//	RxData1[8] = kalman_signal9(RxData[8], 500, 10);
+//	RxData1[9] = kalman_signal10(RxData[9], 500, 10);
+//	RxData1[10] = kalman_signal11(RxData[10], 500, 10);
+
+	//RxData[3] = kalman_signal4(RxData[3], 500, 10);
+//	RxData[4] = kalman_signal5(RxData[4], 500, 10);
+//	RxData[5] = kalman_signal6(RxData[5], 500, 10);
+//	RxData[6] = kalman_signal7(RxData[6], 500, 10);
+	//RxData[7] = kalman_signal8(RxData[7], 500, 10);
+
+}
+
+long MAP(long value, long in_min, long in_max, long out_min, long out_max){
+	long kq = 0;
+  kq = ((value * (out_min + out_max)) / (in_min + in_max));
+  if (kq < out_min) {
+    kq = out_min;
+  }
+  else if (kq > out_max) {
+    kq = out_max;
+  }
+  return kq;
+}
+void Line_config(void){
+	//ADC1 CLOCK enable
+	RCC->APB2ENR |= (1<<8);
+	//GPIOA + GPIOB + GPIOC CLOCK enable
+	RCC->AHB1ENR |= (1<<0) | (1<<1) | (1<<2);
+	
+	//Set the precaler in the Common Control Register (CCR)
+	ADC->CCR |= (1<<16	);	//Precaler div by 4
+	
+	//Set the Scan Mode and Resolution in the Control Register 1 (CR1)
+	ADC1->CR1 |= (1<<8); 	//Scan Mode Enable
+	ADC1->CR1 &= ~(1<<24);	//12 bit RES
+	
+	//Set the Continuous Conversion, EOC, and Data Alignment in Control Reg 2 (CR2)
+	ADC1->CR2 = (1<<1);     // enable continuous conversion mode
+	ADC1->CR2 |= (1<<10);    // EOC after each conversion
+	ADC1->CR2 &= ~(1<<11);   // Data Alignment RIGHT
+	// Enable DMA for ADC
+	ADC1->CR2 |= (1<<8);
+	// Enable Continuous Request
+	ADC1->CR2 |= (1<<9);
+	
+	//Set the Sampling Time for the channels in ADC_SMPRx
+	ADC1->SMPR2 |= ((3<<3)|(3<<6)|(3<<9)|(3<<12)|(3<<15)|(3<<18)|(3<<21)|(3<<24)|(3<<27));
+	ADC1->SMPR1 |= ((3<<0)|(3<<3));
+	
+//	ADC1->SMPR2 |= ((7<<3)|(7<<6)|(7<<9)|(7<<12)|(7<<15)|(7<<18)|(7<<21)|(7<<24)|(7<<27));
+//	ADC1->SMPR1 |= ((7<<0)|(7<<3));
+	//Set the Regular channel sequence length in ADC_SQR1
+	ADC1->SQR1 |= (10<<20);	//SQR1_L = 10 for 11 conversions
+	
+	//Channel Sequence
+	ADC1->SQR3 |= (1<<0);
+	ADC1->SQR3 |= (2<<5);
+	ADC1->SQR3 |= (3<<10);
+	ADC1->SQR3 |= (4<<15);
+	ADC1->SQR3 |= (5<<20);
+	ADC1->SQR3 |= (6<<25);
+	ADC1->SQR2 |= (7<<0);
+	ADC1->SQR2 |= (8<<5);
+	ADC1->SQR2 |= (9<<10);
+	ADC1->SQR2 |= (10<<15);
+	ADC1->SQR2 |= (11<<20);
+	//Set the Respective GPIO PINs in the Ananlog Mode
+	//GPIOA.P0->P7
+	GPIOA->MODER |= (uint16_t)0xFFFF;
+	//GPIOB.P0->P1
+	GPIOB->MODER |= (uint8_t)0xF;
+	//GPIOC.P0->P1
+	GPIOC->MODER |= (uint8_t)0xF;
+}
+
+void Line_Enable(void){
+		uint32_t delay = 10000;
+	ADC1->CR2 |= (1<<0);	//ADON = 1 enable ADC1
+
+	while(delay--);
+}
+void Line_Start(void){
+	ADC1->SR = 0;        // clear the status register
+	ADC1->CR2 |= (1<<30);  // start the conversion
+}
+void Line_Disable(void){
+	ADC1->CR2 &= ~(1<<0);
+}
+
+void Lay_Mau(void){
+	int i, j;
+	int t,d=0;
+	while(d==0){
+		if((GPIOE->IDR&(1<<3)) == 0){
+			while((GPIOE->IDR&(1<<3)) == 0){}
+			so++;
+			for(j = 0; j < 15; j++){
+				for(i = 0; i < 11; i++){
+					Temp_ADC_d[i] += RxData[i];
+				}
+			}
+			d=1;
+		}
+	}
+	while(t==0){
+		if((GPIOE->IDR&(1<<4)) == 0){
+			while((GPIOE->IDR&(1<<4)) == 0){}
+			so++;
+			for(j = 0; j < 15; j++){
+				for(i = 0; i < 11; i++){
+					Temp_ADC_t[i] += RxData[i];
+				}
+			}
+			t=1;
+		}
+	}
+	delay(2000);
+	for(i = 0; i < 11; i++){
+		TB[i] = ((Temp_ADC_d[i]/15)+(Temp_ADC_t[i]/15))/2;
+	}
+}
+
+
+
+
+void XuLyDataLine(void){
+	int i,j;
+//	filter();
+	for(j = 0; j < 10; j++){
+		for (i = 0; i < 11; i++) {
+			if (RxData1[i] < TB[i]) TB_ADC[i] = 0;
+			if (RxData1[i] >= TB[i]) TB_ADC[i] = 1;
+		}
+	}
+
+  if((TB_ADC[4]==1&&TB_ADC[5]==1&&TB_ADC[6]==1&&TB_ADC[7]==1&&TB_ADC[8]==1&&TB_ADC[9]==1&&TB_ADC[10]==1)||(TB_ADC[0]==1&&TB_ADC[1]==1&&TB_ADC[2]==1&&TB_ADC[3]==1&&TB_ADC[4]==1&&TB_ADC[5]==1&&TB_ADC[6]==1&&TB_ADC[7]==1&&TB_ADC[8]==1&&TB_ADC[9]==1&&TB_ADC[10]==1)){
+		
+		TIM10->CCR1 = 80;
+		TIM11->CCR1 = 80;
+		delay(500);
+	//Phai
+		GPIOB->ODR |= 1<<14;
+		GPIOB->ODR &= ~(1<<13);
+		GPIOB->ODR |= 1<<11;
+		GPIOB->ODR &= ~(1<<12);
+		TIM10->CCR1 = 80;
+		TIM11->CCR1 = 80;
+		delay(1700);
+			//Thang
+		GPIOB->ODR |= 1<<14;
+		GPIOB->ODR &= ~(1<<13);
+		GPIOB->ODR |= 1<<12;
+		GPIOB->ODR &= ~(1<<11);
+	}
+//	if((TB_ADC[0]==1&&TB_ADC[1]==1&&TB_ADC[2]==1&&TB_ADC[3]==1&&TB_ADC[4]==1&&TB_ADC[5]==1&&TB_ADC[6]==1)||(TB_ADC[0]==1&&TB_ADC[1]==1&&TB_ADC[2]==1&&TB_ADC[3]==1&&TB_ADC[4]==1&&TB_ADC[5]==1&&TB_ADC[6]==1&&TB_ADC[7]==1&&TB_ADC[8]==1&&TB_ADC[9]==1&&TB_ADC[10]==1)){
+//		
+//		TIM10->CCR1 = 80;
+//		TIM11->CCR1 = 80;
+//		delay(500);
+//		//Trai
+//		GPIOB->ODR |= 1<<13;
+//		GPIOB->ODR &= ~(1<<14);
+//		GPIOB->ODR |= 1<<12;
+//		GPIOB->ODR &= ~(1<<11);
+//		TIM10->CCR1 = 80;
+//		TIM11->CCR1 = 80;
+//		delay(1700);
+//			//Thang
+//		GPIOB->ODR |= 1<<14;
+//		GPIOB->ODR &= ~(1<<13);
+//		GPIOB->ODR |= 1<<12;
+//		GPIOB->ODR &= ~(1<<11);
+//	}
+  else{
+		data_line = TB_ADC[0] * 1000 + TB_ADC[1] * 900 + TB_ADC[2] * 800 + TB_ADC[3] * 700 + TB_ADC[4] * 600 + TB_ADC[5] * 500 + TB_ADC[6] * 400 + TB_ADC[7] * 300 + TB_ADC[8] * 200 + TB_ADC[9] * 100 + TB_ADC[10] * 0;
+		if (data_line == 0 && TB_ADC[0] == 0 && TB_ADC[1] == 0 && TB_ADC[2] == 0 && TB_ADC[3] == 0 && TB_ADC[4] == 0 && TB_ADC[5] == 0 && TB_ADC[6] == 0 && TB_ADC[7] == 0 && TB_ADC[8] == 0 && TB_ADC[9] == 0 && TB_ADC[10] == 0) {
+			if (out_line == 1) {
+				TIM10->CCR1 = 130;
+				TIM11->CCR1 = 0;
+	//      analogWrite(dongcophai, 70);
+	//      analogWrite(dongcotrai, 0);
+			} else {
+				TIM10->CCR1 = 0;
+				TIM11->CCR1 = 130;
+	//      analogWrite(dongcophai, 0);
+	//      analogWrite(dongcotrai, 70);
+			}
+		}else{
+			//Sua
+			if((data_line==0&&TB_ADC[10]==1) || (data_line==100&&TB_ADC[10]==1&&TB_ADC[9]==1)){
+					Actual = 0; out_line = -1;
+				}
+				if((data_line==300&&TB_ADC[9]==1&&TB_ADC[8]==1) || (data_line==300&&TB_ADC[10]==1&&TB_ADC[9]==1&&TB_ADC[8]==1) || (data_line==1000&&TB_ADC[9]==1&&TB_ADC[8]==1&&TB_ADC[7]==1&&TB_ADC[6]==1)){
+					Actual = 100; out_line = -1;
+				}
+				if((data_line==500&&TB_ADC[8]==1&&TB_ADC[7]==1) || (data_line==600&&TB_ADC[9]==1&&TB_ADC[8]==1&&TB_ADC[7]==1)){
+					Actual = 200; out_line = -1;
+				}
+				if((data_line==900&&TB_ADC[6]==1&&TB_ADC[5]==1) || (data_line==1400&&TB_ADC[8]==1&&TB_ADC[7]==1&&TB_ADC[6]==1&&TB_ADC[5]==1) || (data_line==700&&TB_ADC[7]==1&&TB_ADC[6]==1) || (data_line==900&&TB_ADC[8]==1&&TB_ADC[7]==1&&TB_ADC[6]==1)){
+					Actual = 300; out_line = -1;
+				}
+				if((data_line==1200&&TB_ADC[7]==1&&TB_ADC[6]==1&&TB_ADC[5]==1) || (data_line==1800&&TB_ADC[7]==1&&TB_ADC[6]==1&&TB_ADC[5]==1&&TB_ADC[4]==1)){
+					Actual = 400; out_line = -1;
+				}
+				if((data_line==1500&&TB_ADC[6]==1&&TB_ADC[5]==1&&TB_ADC[4]==1)){
+					Actual = 500; out_line = -1;
+				}
+				if((data_line==1800&&TB_ADC[5]==1&&TB_ADC[4]==1&&TB_ADC[3]==1) || (data_line==2200&&TB_ADC[6]==1&&TB_ADC[5]==1&&TB_ADC[4]==1&&TB_ADC[3]==1)){
+					Actual = 600; out_line = 1;
+				}
+				if((data_line==1100&&TB_ADC[5]==1&&TB_ADC[4]==1) || (data_line==2600&&TB_ADC[5]==1&&TB_ADC[4]==1&&TB_ADC[3]==1&&TB_ADC[2]==1) || (data_line==1300&&TB_ADC[4]==1&&TB_ADC[3]==1) || (data_line==2100&&TB_ADC[4]==1&&TB_ADC[3]==1&&TB_ADC[2]==1)){
+					Actual = 700; out_line = 1;
+				}
+				if((data_line==1500&&TB_ADC[3]==1&&TB_ADC[2]==1) || (data_line==2400&&TB_ADC[3]==1&&TB_ADC[2]==1&&TB_ADC[1]==1)){
+					Actual = 800; out_line = 1;
+				}
+				if((data_line==1700&&TB_ADC[2]==1&&TB_ADC[1]==1) || (data_line==2700&&TB_ADC[2]==1&&TB_ADC[1]==1&&TB_ADC[0]==1) || (data_line==3000&&TB_ADC[4]==1&&TB_ADC[3]==1&&TB_ADC[2]==1&&TB_ADC[1]==1)){
+					Actual = 900; out_line = 1;
+				}
+				if((data_line==1000&&TB_ADC[0]==1) || (data_line==1900&&TB_ADC[1]==1&&TB_ADC[0]==1)){
+					Actual = 1000; out_line = 1;
+				}
+		//		if((data_line==0&&TB_ADC[10]==1) || (data_line==100&&TB_ADC[10]==1&&TB_ADC[9]==1)){
+		//			Actual = 0; out_line = -1;
+		//		}
+		//		if((data_line==300&&TB_ADC[9]==1&&TB_ADC[8]==1) || (data_line==300&&TB_ADC[10]==1&&TB_ADC[9]==1&&TB_ADC[8]==1)){
+		//			Actual = 100; out_line = -1;
+		//		}
+		//		if((data_line==500&&TB_ADC[8]==1&&TB_ADC[7]==1) || (data_line==600&&TB_ADC[9]==1&&TB_ADC[8]==1&&TB_ADC[7]==1) || (data_line==1000&&TB_ADC[9]==1&&TB_ADC[8]==1&&TB_ADC[7]==1&&TB_ADC[6]==1)){
+		//			Actual = 200; out_line = -1;
+		//		}
+		//		if((data_line==700&&TB_ADC[7]==1&&TB_ADC[6]==1) || (data_line==900&&TB_ADC[8]==1&&TB_ADC[7]==1&&TB_ADC[6]==1) || (data_line==1400&&TB_ADC[8]==1&&TB_ADC[7]==1&&TB_ADC[6]==1&&TB_ADC[5]==1)){
+		//			Actual = 300; out_line = -1;
+		//		}
+		//		if((data_line==900&&TB_ADC[6]==1&&TB_ADC[5]==1) || (data_line==1200&&TB_ADC[7]==1&&TB_ADC[6]==1&&TB_ADC[5]==1) || (data_line==1800&&TB_ADC[7]==1&&TB_ADC[6]==1&&TB_ADC[5]==1&&TB_ADC[4]==1)){
+		//			Actual = 400; out_line = -1;
+		//		}
+		//		if(data_line==1500&&TB_ADC[6]==1&&TB_ADC[5]==1&&TB_ADC[4]==1){
+		//			Actual = 500; out_line = -1;
+		//		}
+		//		if((data_line==1100&&TB_ADC[5]==1&&TB_ADC[4]==1) || (data_line==1800&&TB_ADC[5]==1&&TB_ADC[4]==1&&TB_ADC[3]==1) || (data_line==2200&&TB_ADC[6]==1&&TB_ADC[5]==1&&TB_ADC[4]==1&&TB_ADC[3]==1)){
+		//			Actual = 600; out_line = 1;
+		//		}
+		//		if((data_line==1300&&TB_ADC[4]==1&&TB_ADC[3]==1) || (data_line==2100&&TB_ADC[4]==1&&TB_ADC[3]==1&&TB_ADC[2]==1) || (data_line==2600&&TB_ADC[5]==1&&TB_ADC[4]==1&&TB_ADC[3]==1&&TB_ADC[2]==1)){
+		//			Actual = 700; out_line = 1;
+		//		}
+		//		if((data_line==1500&&TB_ADC[3]==1&&TB_ADC[2]==1) || (data_line==2400&&TB_ADC[3]==1&&TB_ADC[2]==1&&TB_ADC[1]==1) || (data_line==3000&&TB_ADC[4]==1&&TB_ADC[3]==1&&TB_ADC[2]==1&&TB_ADC[1]==1)){
+		//			Actual = 800; out_line = 1;
+		//		}
+		//		if((data_line==1700&&TB_ADC[2]==1&&TB_ADC[1]==1) || (data_line==2700&&TB_ADC[2]==1&&TB_ADC[1]==1&&TB_ADC[0]==1)){
+		//			Actual = 900; out_line = 1;
+		//		}
+		//		if((data_line==1000&&TB_ADC[0]==1) || (data_line==1900&&TB_ADC[1]==1&&TB_ADC[0]==1)){
+		//			Actual = 1000; out_line = 1;
+		//		}
+		///
+		//		if ((data_line == 0 && TB_ADC[10] == 1)) {
+		//      Actual = 0; out_line = -1;
+		//    } else if ((data_line == 300 && TB_ADC[10] == 1&& TB_ADC[9] == 1&& TB_ADC[8] == 1)) {
+		//      Actual = 100; out_line = -1;
+		//    } else if ((data_line == 600 && TB_ADC[9] == 1&& TB_ADC[8] == 1&& TB_ADC[7] == 1)) {
+		//      Actual = 200; out_line = -1;
+		//    } else if ((data_line == 900 && TB_ADC[8] == 1&& TB_ADC[7] == 1&& TB_ADC[6] == 1) || (data_line == 1400 && TB_ADC[8] == 1&& TB_ADC[7] == 1&& TB_ADC[6] == 1&& TB_ADC[5] == 1)) {
+		//      Actual = 300; out_line = -1;
+		//    } else if ((data_line == 1200 && TB_ADC[7] == 1&& TB_ADC[6] == 1&& TB_ADC[5] == 1) || (data_line == 900 && TB_ADC[6] == 1&& TB_ADC[5] == 1) || (data_line == 1800 && TB_ADC[7] == 1&& TB_ADC[6] == 1&& TB_ADC[5] == 1&& TB_ADC[4] == 1)) {
+		//      Actual = 400; out_line = -1;
+		//    } else if ((data_line == 500 && TB_ADC[5] == 1) || (data_line == 1500 && TB_ADC[6] == 1&& TB_ADC[5] == 1&& TB_ADC[4] == 1)) {
+		//      Actual = 500; out_line = 1; //Middle
+		//    } else if ((data_line == 1800 && TB_ADC[5] == 1&& TB_ADC[4] == 1&& TB_ADC[3] == 1) || (data_line == 1100 && TB_ADC[4] == 1&& TB_ADC[5] == 1) || (data_line == 2200 && TB_ADC[6] == 1&& TB_ADC[5] == 1&& TB_ADC[4] == 1&& TB_ADC[3] == 1)) {
+		//      Actual = 600; out_line = 1;
+		//    } else if ((data_line == 2100 && TB_ADC[2] == 1&& TB_ADC[3] == 1&& TB_ADC[4] == 1) || (data_line == 2600 && TB_ADC[5] == 1&& TB_ADC[4] == 1&& TB_ADC[3] == 1&& TB_ADC[2] == 1)) {
+		//      Actual = 700; out_line = 1;
+		//    } else if ((data_line == 2400 && TB_ADC[3] == 1&& TB_ADC[2] == 1&& TB_ADC[1] == 1)) {
+		//      Actual = 800; out_line = 1;
+		//    } else if ((data_line == 2700 && TB_ADC[2] == 1&& TB_ADC[1] == 1&& TB_ADC[0] == 1)) {
+		//      Actual = 900; out_line = 1;
+		//    } else if ((data_line == 1000 && TB_ADC[0] == 1)) {
+		//      Actual = 1000; out_line = 1;
+		//    }
+				Error = Target - Actual;
+				ErrorChange = Error - ErrorOld;
+				ErrorSlope = ErrorChange;
+				ErrorArea = ErrorArea + Error;
+				PWM_Value = kp * Error + ki * ErrorArea + kd * ErrorSlope;
+				ErrorOld = Error;
+				if (PWM_Value >= 1000 || PWM_Value <= -1000) PWM_Value = PWM_Value_old;
+		//    left = 1000 + PWM_Value;
+		//    right = 1000 - PWM_Value;
+		//    left = MAP(left, 0, 1000, 0, 100);
+		//    right = MAP(right, 0, 1000, 0, 100);
+				left = 1000 + PWM_Value;
+				right = 1000 - PWM_Value;
+				left = MAP(left, 0, 1000, 0, max_speed);
+				right = MAP(right, 0, 1000, 0, max_speed);
+				//  left = constrain(left, 0, 255);
+				//  right = constrain(right, 0, 255);
+				TIM11->CCR1 = left;
+				TIM10->CCR1 = right;
+		//    analogWrite(dongcotrai, left);
+		//    analogWrite(dongcophai, right);
+				PWM_Value_old = PWM_Value;
+			}
+	}
+	//delay(10);
+}
+void Motor_Init(void);
+uint8_t CompareID(char* CardID, char* CompareIDs);
+void rfid_read(void){
+	uint8_t i =0;
+	char rfid_info[50] = "";
+	status = MFRC522_Request(PICC_REQALL, g_ucTempbuf);
+	if (status != MI_OK)
+	{  
+		flag_loop=0;  
+		return;
+	}
+	status = MFRC522_Anticoll(g_ucTempbuf);
+	if (status != MI_OK)
+ {  
+	 flag_loop=0;  
+	 return;
+ }
+	if(flag_loop==1) 
+	{
+	 MFRC522_Halt();	
+	 return;
+	}
+	flag_loop=1;
+	sprintf(buffer, "%02X%02X%02X%02X",	g_ucTempbuf[0],g_ucTempbuf[1],g_ucTempbuf[2],g_ucTempbuf[3]);
+	strcat(rfid_info, "{\"ma_rfid\":\"");
+	strcat(rfid_info, buffer);
+	
+	strcat(rfid_info,"\"}\n");
+	USART_Puts(USART1, rfid_info);
+	for(i = 0; i < 50 ; i++){
+				rfid_info[i] = 0;
+	}
+	//printf("\n UID=%x:%x:%x:%x\r\n",g_ucTempbuf[0],g_ucTempbuf[1],g_ucTempbuf[2],g_ucTempbuf[3] );
+	MFRC522_Halt();
+}
+void Speed_Motor(uint8_t Left_Motor, uint8_t Right_Motor){
+//	GPIOB->ODR |= 1<<10;
+//	GPIOB->ODR &= ~(1<<11);
+//	GPIOB->ODR |= 1<<13;
+//	GPIOB->ODR &= ~(1<<12);
+//	delay(3000);
+//	GPIOB->ODR |= 1<<11;
+//	GPIOB->ODR &= ~(1<<10);
+//	GPIOB->ODR |= 1<<12;
+//	GPIOB->ODR &= ~(1<<13);
+//	delay(3000);
+	
+/*
+10	 9 	8 	 7  6 5   4 3 2 1
+-4	-3	-2	-1	0 0 	1	2	3	4
+	for()
+*/
+}
+
+void DMA_ADC_Init(void){
+	// Enable the DMA2 Clock
+	RCC->AHB1ENR |= (1<<22);  // DMA2EN = 1
+	// Select the Data Direction
+	DMA2_Stream0->CR &= ~(3<<6);  // Peripheral to memory
+		
+	// Select Circular mode
+	DMA2_Stream0->CR |= (1<<8);  // CIRC = 1
+		
+	// Enable Memory Address Increment
+	DMA2_Stream0->CR |= (1<<10);  // MINC = 1;
+
+	// Set the size for data 
+	DMA2_Stream0->CR |= (1<<11)|(1<<13);  // PSIZE = 01, MSIZE = 01, 16 bit data
+		
+	// Select channel for the stream
+	DMA2_Stream0->CR &= ~(7<<25);  // Channel 0 selected
+	
+	DMA2_Stream0->NDTR = 11;   // Set the size of the transfer
+	
+	DMA2_Stream0->PAR = (uint32_t ) &ADC1->DR;  // Source address is peripheral address
+		
+	DMA2_Stream0->M0AR = (uint32_t) RxData;  // Destination Address is memory address
+		
+	// Enable the DMA Stream
+	DMA2_Stream0->CR |= (1<<0);  // EN =1	
+}
+
+
+void PWMInit(void){
+	uint16_t PrescalerValue = (uint16_t) 84;
+	GPIO_InitTypeDef            GPIO_InitStructure;
+	TIM_TimeBaseInitTypeDef     TIM_TimeBaseStructure;
+	TIM_OCInitTypeDef           TIM_OCInitStructure;
+
+	RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM4, ENABLE);
+
+	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOB, ENABLE);
+
+	GPIO_InitStructure.GPIO_Pin     = GPIO_Pin_6 | GPIO_Pin_7;
+	GPIO_InitStructure.GPIO_Mode    = GPIO_Mode_AF;
+	GPIO_InitStructure.GPIO_Speed   = GPIO_Speed_100MHz;
+	GPIO_InitStructure.GPIO_OType   = GPIO_OType_PP;
+	GPIO_InitStructure.GPIO_PuPd    = GPIO_PuPd_UP;
+	GPIO_Init(GPIOB, &GPIO_InitStructure);
+
+	GPIO_PinAFConfig(GPIOB, GPIO_PinSource6, GPIO_AF_TIM4);
+	GPIO_PinAFConfig(GPIOB, GPIO_PinSource7, GPIO_AF_TIM4);
+
+	/*
+	* 84M / TIM_Prescaler = 1M
+	* 1M / TIM_ClockDivision = 1M
+	* 1M / (TIM_Period + 1) = 50Hz (20ms)
+	* TIM_Pulse = 500(us) ~ 2500(us)
+	*/
+
+
+	TIM_TimeBaseStructure.TIM_Period        = 19999;
+	TIM_TimeBaseStructure.TIM_Prescaler     = PrescalerValue;
+	TIM_TimeBaseStructure.TIM_ClockDivision = TIM_CKD_DIV1;//0;
+	TIM_TimeBaseStructure.TIM_CounterMode   = TIM_CounterMode_Up;
+
+	TIM_TimeBaseInit(TIM4, &TIM_TimeBaseStructure);
+
+	TIM_OCInitStructure.TIM_OCMode      = TIM_OCMode_PWM1;
+	TIM_OCInitStructure.TIM_OutputState = TIM_OutputState_Enable;
+	TIM_OCInitStructure.TIM_Pulse       = 0; 
+	TIM_OCInitStructure.TIM_OCPolarity  = TIM_OCPolarity_High;
+
+	TIM_OC1Init(TIM4, &TIM_OCInitStructure);
+	TIM_OC1PreloadConfig(TIM4, TIM_OCPreload_Enable);
+
+	TIM_OC2Init(TIM4, &TIM_OCInitStructure);
+	TIM_OC2PreloadConfig(TIM4, TIM_OCPreload_Enable);
+
+	TIM_ARRPreloadConfig(TIM4, ENABLE);
+
+	TIM_Cmd(TIM4, ENABLE);
+}
+
+
+void TCRT5000(void) {
+  GPIO_InitTypeDef  GPIO_InitStructure;
+  
+  RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOD, ENABLE);
+
+  /* Configure the GPIO_LED pin */
+  GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0 | GPIO_Pin_1| GPIO_Pin_2 | GPIO_Pin_3 | GPIO_Pin_4;
+  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN;
+  GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+  GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;
+  GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+  GPIO_Init(GPIOD, &GPIO_InitStructure);
+}
+
+uint8_t tcrt_arr[5] = {0};
+
+void XuLyTCRT5000(void){
+	//Doc trang thai mat
+	tcrt_arr[0] = GPIOD->IDR&(1<<0);
+	tcrt_arr[1] = GPIOD->IDR&(1<<1);
+	tcrt_arr[2] = GPIOD->IDR&(1<<2);
+	tcrt_arr[3] = GPIOD->IDR&(1<<3);
+	tcrt_arr[4] = GPIOD->IDR&(1<<4);
+	
+	if(tcrt_arr[0]==1&&tcrt_arr[1]==2&&tcrt_arr[2]==4&&tcrt_arr[3]==8&&tcrt_arr[4]==16){
+		//			//thang
+		GPIOB->ODR |= 1<<14;
+		GPIOB->ODR &= ~(1<<13);
+		GPIOB->ODR |= 1<<12;
+		GPIOB->ODR &= ~(1<<11);
+		TIM10->CCR1 = 100;
+		TIM11->CCR1 = 100;
+		delay(900);
+//		//			//xoay trai
+//		GPIOB->ODR |= 1<<13;
+//		GPIOB->ODR &= ~(1<<14);
+//		GPIOB->ODR |= 1<<12;
+//		GPIOB->ODR &= ~(1<<11);
+//		TIM10->CCR1 = 100;
+//		TIM11->CCR1 = 100;
+		//			//xoay phai
+		GPIOB->ODR |= 1<<14;
+		GPIOB->ODR &= ~(1<<13);
+		GPIOB->ODR |= 1<<11;
+		GPIOB->ODR &= ~(1<<12);
+		TIM10->CCR1 = 100;
+		TIM11->CCR1 = 100;
+		delay(1300);
+		GPIOB->ODR |= 1<<14;
+		GPIOB->ODR &= ~(1<<13);
+		GPIOB->ODR |= 1<<12;
+		GPIOB->ODR &= ~(1<<11);
+		TIM10->CCR1 = 0;
+		TIM11->CCR1 = 0;
+	}
+	else{
+		if(tcrt_arr[0]==1&&tcrt_arr[1]==0&&tcrt_arr[2]==0&&tcrt_arr[3]==0&&tcrt_arr[4]==0){
+			Actual = 0;
+		}
+		else if((tcrt_arr[0]==0&&tcrt_arr[1]==2&&tcrt_arr[2]==0&&tcrt_arr[3]==0&&tcrt_arr[4]==0) || (tcrt_arr[0]==0&&tcrt_arr[1]==2&&tcrt_arr[2]==4&&tcrt_arr[3]==0&&tcrt_arr[4]==0)){
+			Actual = 250;
+		}
+		else if(tcrt_arr[0]==0&&tcrt_arr[1]==0&&tcrt_arr[2]==4&&tcrt_arr[3]==0&&tcrt_arr[4]==0){
+			Actual = 500;
+		}
+		else if((tcrt_arr[0]==0&&tcrt_arr[1]==0&&tcrt_arr[2]==0&&tcrt_arr[3]==8&&tcrt_arr[4]==0) || (tcrt_arr[0]==0&&tcrt_arr[1]==0&&tcrt_arr[2]==4&&tcrt_arr[3]==8&&tcrt_arr[4]==0)){
+			Actual = 750;
+		}
+		else if(tcrt_arr[0]==0&&tcrt_arr[1]==0&&tcrt_arr[2]==0&&tcrt_arr[3]==0&&tcrt_arr[4]==16){
+			Actual = 1000;
+		}
+		
+		Error = Target - Actual;
+		ErrorChange = Error - ErrorOld;
+		ErrorSlope = ErrorChange;
+		ErrorArea = ErrorArea + Error;
+		PWM_Value = kp * Error + ki * ErrorArea + kd * ErrorSlope;
+		ErrorOld = Error;
+		//if (PWM_Value >= 1000 || PWM_Value <= -1000) PWM_Value = PWM_Value_old;
+		left = 500 + PWM_Value;
+		right = 500 - PWM_Value;
+		left = MAP(left, 0, 500, 0, max_speed);
+		right = MAP(right, 0, 500, 0, max_speed);
+		TIM11->CCR1 = right;
+		TIM10->CCR1 = left;
+		PWM_Value_old = PWM_Value;
+	}
+	
+	
+}
+
+
+
+
+uint8_t ngat_usart = 0;
+uint8_t xoay = 0;
+
+SemaphoreHandle_t semaphoret;
+TaskHandle_t DMA_Hdle;
+TaskHandle_t RFID_Hdle;
+void TaskDMA(void* param);
+void TaskRFID(void* param);
+void Task1(void* param);
+
+
+RCC_ClocksTypeDef clk;
+uint32_t sysll, sysh1, sysh2;
+int main(){
+
+	uint32_t i = 0;
+//	int i;
+	GPIO_InitTypeDef gpio;
+		TM_SERVO_t Servo1, Servo2;
+//	SystemInit();
+	RCC_Setup();
+
+	TM_SERVO_Init(&Servo1, TIM8, TM_PWM_Channel_1, TM_PWM_PinsPack_1);
+	TM_SERVO_Init(&Servo2, TIM8, TM_PWM_Channel_2, TM_PWM_PinsPack_1);
+	TCRT5000();
+	RCC_GetClocksFreq(&clk);
+	sysll = clk.SYSCLK_Frequency;
+	sysh1 = clk.PCLK1_Frequency;
+	sysh2 = clk.PCLK2_Frequency;
+	//ROBOT_Init();
+	TIMER13_Init();
+
+	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOE, ENABLE);
+//	
+//	gpio.GPIO_Pin = GPIO_Pin_6|GPIO_Pin_7;
+//	gpio.GPIO_Mode = GPIO_Mode_OUT;
+//	gpio.GPIO_OType = GPIO_OType_PP;
+//	gpio.GPIO_PuPd = GPIO_PuPd_UP;
+//	gpio.GPIO_Speed = GPIO_High_Speed;
+//	GPIO_Init(GPIOA, &gpio);
+//	
+	
+	gpio.GPIO_Pin = GPIO_Pin_3|GPIO_Pin_4;
+	gpio.GPIO_Mode = GPIO_Mode_IN;
+	gpio.GPIO_OType = GPIO_OType_PP;
+	gpio.GPIO_PuPd = GPIO_PuPd_UP;
+	gpio.GPIO_Speed = GPIO_High_Speed;
+	GPIO_Init(GPIOE, &gpio);
+//
+
+//	GPIOA->ODR |= 1<<6;
+//	GPIOA->ODR |= 1<<7;
+	
+	HCSR04_Init();
+	//MFRC522_Init();
+	//TM_MFRC522_Init();
+	
+	MF522_init();
+	//delay_init(168);
+	MFRC522_Reset();
+	MFRC522_AntennaOn();  
+//	printf("CHUONG TRINH RFID\r\n");
+//    //MFRC522_AntennaOff(); 
+	Usart_Cofig();
+	
+//	Line_config();
+//	Line_Enable();
+//	DMA_ADC_Init();
+//	Line_Start();
+	
+	//Lay_Mau();
+	
+	Motor_Init();
+	
+	//dc trai tim11
+	GPIOB->ODR |= 1<<14;
+	GPIOB->ODR &= ~(1<<13);
+	//dc phai tim10
+	GPIOB->ODR |= 1<<12;
+	GPIOB->ODR &= ~(1<<11);
+	TIM10->CCR1 = 0;
+	TIM11->CCR1 = 0;
+	//TM_SERVO_SetDegrees(&Servo1, 0);
+	while(1){
+		for(i = 0; i < 180; i+=1){
+			TM_SERVO_SetDegrees(&Servo1, i);
+			
+			TM_SERVO_SetDegrees(&Servo2, i);
+			//TIM8->CCR1 = i;
+			delay(25);
+		}
+		delay(25);
+//		TM_SERVO_SetDegrees(&Servo1, 90);delay(25);
+//		TM_SERVO_SetDegrees(&Servo1, 45);delay(25);
+//		TM_SERVO_SetDegrees(&Servo1, 0);
+		for(i = 179; i > 0; i-=1){
+			TM_SERVO_SetDegrees(&Servo1, i);
+			TM_SERVO_SetDegrees(&Servo2, i);
+			//TIM8->CCR1 = i;
+			delay(25);
+		}
+		delay(25);
+	}
+	while(1){
+//		ADC_READ();
+//		filter();
+		//XuLyTCRT5000();
+		//rfid_read();
+		if(CompareID(buffer, R7)== 0|| CompareID(buffer, R9)== 0 ){
+				TIM10->CCR1 = 0;
+				TIM11->CCR1 = 0;
+				delay(2050);
+			for(i = 0; i<15;i++) buffer[i]='\0';
+		}
+		if(CompareID(buffer, R8)== 0|| CompareID(buffer, R10)== 0 ){
+				TIM10->CCR1 = 0;
+				TIM11->CCR1 = 0;
+				delay(2050);
+			for(i = 0; i<15;i++) buffer[i]='\0';
+		}
+	}
+
+//	semaphoret = xSemaphoreCreateMutex();
+//	xTaskCreate(TaskDMA, "task1", 2000, NULL, 0, &DMA_Hdle);
+//	xTaskCreate(TaskRFID, "task2", 2000, NULL, 1, &RFID_Hdle);
+//	//xTaskCreate(Task1, "task11", 2000, NULL, 0, NULL);
+//	vTaskStartScheduler();
+	
+	while(1){
+//		if(bdRaKhoiHome==0){
+//			//xoay
+//				GPIOB->ODR |= 1<<14;
+//				GPIOB->ODR &= ~(1<<13);
+//				GPIOB->ODR |= 1<<11;
+//				GPIOB->ODR &= ~(1<<12);
+//				TIM10->CCR1 = 100;
+//				TIM11->CCR1 = 100;
+//				delay(1000);
+//				GPIOB->ODR |= 1<<14;
+//				GPIOB->ODR &= ~(1<<13);
+//				//dc phai tim10
+//				GPIOB->ODR |= 1<<12;
+//				GPIOB->ODR &= ~(1<<11);
+//			//Thang
+//				TIM10->CCR1 = 100;
+//				TIM11->CCR1 = 100;
+//				delay(1000);
+//			//Trai
+//				TIM10->CCR1 = 70;
+//				TIM11->CCR1 = 20;
+//				delay(2500);
+//			bdRaKhoiHome = 1;
+//		}
+		
+		//		vTaskDelete(NULL);
+		
+//		HCSR_GetDistance(&dis);
+//		if(dis<20){
+//			stop = 1;
+//			TIM11->CCR1 = 0;
+//			TIM10->CCR1 = 0;
+//		}else stop = 0;
+		if(stop==0){
+
+			XuLyDataLine();
+//			rfid_read();
+//			if((strcmp(R2, buffer)==0||strcmp(R4, buffer)==0) && so<2){
+//				//			//xoay trai
+//				GPIOB->ODR |= 1<<13;
+//				GPIOB->ODR &= ~(1<<14);
+//				GPIOB->ODR |= 1<<12;
+//				GPIOB->ODR &= ~(1<<11);
+//				TIM10->CCR1 = 100;
+//				TIM11->CCR1 = 100;
+//				delay(400);
+//				GPIOB->ODR |= 1<<14;
+//				GPIOB->ODR &= ~(1<<13);
+//				GPIOB->ODR |= 1<<12;
+//				GPIOB->ODR &= ~(1<<11);
+//			}
+			
+			if(CompareID(buffer, R3)== 0|| CompareID(buffer, R2)== 0 ){
+				//Thang
+				GPIOB->ODR |= 1<<14;
+				GPIOB->ODR &= ~(1<<13);
+				GPIOB->ODR |= 1<<12;
+				GPIOB->ODR &= ~(1<<11);
+				TIM10->CCR1 = 70;
+				TIM11->CCR1 = 0;
+				delay(2050);
+			}
+
+//			if(CompareID(buffer, R1)== 0 || CompareID(buffer, R4)== 0 ){
+//				//			//xoay phai
+//				GPIOB->ODR |= 1<<14;
+//				GPIOB->ODR &= ~(1<<13);
+//				GPIOB->ODR |= 1<<11;
+//				GPIOB->ODR &= ~(1<<12);
+//				TIM10->CCR1 = 70;
+//				TIM11->CCR1 = 70;
+//				delay(1000);
+//				GPIOB->ODR |= 1<<14;
+//				GPIOB->ODR &= ~(1<<13);
+//				GPIOB->ODR |= 1<<12;
+//				GPIOB->ODR &= ~(1<<11);
+//				
+//			}
+
+			for(i = 0; i<15;i++) buffer[i]='\0';
+		}
+
+//		if(strcmp(R0, buffer)==0){
+//			//xoay phai
+//			GPIOB->ODR |= 1<<14;
+//			GPIOB->ODR &= ~(1<<13);
+//			GPIOB->ODR |= 1<<11;
+//			GPIOB->ODR &= ~(1<<12);
+//			TIM10->CCR1 = 100;
+//			TIM11->CCR1 = 100;
+//			delay(4500);
+//			//lui
+//			GPIOB->ODR |= 1<<13;
+//			GPIOB->ODR &= ~(1<<14);
+//			GPIOB->ODR |= 1<<11;
+//			GPIOB->ODR &= ~(1<<12);
+//			delay(1000);
+//			TIM10->CCR1 = 0;
+//			TIM11->CCR1 = 0;
+//			delay(3000);
+//			//thang
+//			GPIOB->ODR |= 1<<14;
+//			GPIOB->ODR &= ~(1<<13);
+//			GPIOB->ODR |= 1<<12;
+//			GPIOB->ODR &= ~(1<<11);
+//			TIM10->CCR1 = 100;
+//			TIM11->CCR1 = 100;
+//			delay(1000);
+//			//xoay trai
+//			GPIOB->ODR |= 1<<13;
+//			GPIOB->ODR &= ~(1<<14);
+//			GPIOB->ODR |= 1<<12;
+//			GPIOB->ODR &= ~(1<<11);
+//			TIM10->CCR1 = 100;
+//			TIM11->CCR1 = 100;
+//			delay(1750);
+//			TIM10->CCR1 = 0;
+//			TIM11->CCR1 = 0;
+//			for(i = 0; i < 200 ; i++){
+//						buffer[i] = 0;
+//			}
+//			stop=1;
+//			//delay(2700);
+//		}
+
+//		if(strcmp(R0, buffer)==0){
+//			
+//			
+//			//xoay trai
+//			GPIOB->ODR |= 1<<13;
+//			GPIOB->ODR &= ~(1<<14);
+//			GPIOB->ODR |= 1<<12;
+//			GPIOB->ODR &= ~(1<<11);
+//			TIM10->CCR1 = 100;
+//			TIM11->CCR1 = 100;
+//			delay(4500);
+//			//lui
+//			GPIOB->ODR |= 1<<13;
+//			GPIOB->ODR &= ~(1<<14);
+//			GPIOB->ODR |= 1<<11;
+//			GPIOB->ODR &= ~(1<<12);
+//			delay(1000);
+//			TIM10->CCR1 = 0;
+//			TIM11->CCR1 = 0;
+//			delay(3000);
+//			//thang
+//			GPIOB->ODR |= 1<<14;
+//			GPIOB->ODR &= ~(1<<13);
+//			GPIOB->ODR |= 1<<12;
+//			GPIOB->ODR &= ~(1<<11);
+//			TIM10->CCR1 = 100;
+//			TIM11->CCR1 = 100;
+//			delay(1000);
+//			//xoay phai
+//			GPIOB->ODR |= 1<<14;
+//			GPIOB->ODR &= ~(1<<13);
+//			GPIOB->ODR |= 1<<11;
+//			GPIOB->ODR &= ~(1<<12);
+//			TIM10->CCR1 = 100;
+//			TIM11->CCR1 = 100;
+//			delay(1750);
+//			TIM10->CCR1 = 0;
+//			TIM11->CCR1 = 0;
+//			for(i = 0; i < 200 ; i++){
+//						buffer[i] = 0;
+//			}
+//			stop=1;
+//			//delay(2700);
+//		}
+//		
+//		bd_kt = 78;
+//		HuongRaHome();
+//		if(strcmp(R4, buffer)==0||strcmp(R8, buffer)==0){
+//			//Trai
+//			TIM10->CCR1 = 0;
+//			TIM11->CCR1 = 0;
+//			delay(10000);
+//			//delay(2700);
+//		}
+		
+		//sprintf(buffer, "%s", "22061B34");
+		//if(strcmp(buffer, "22061B34") == 0) USART_Puts(USART1, "OK\n");
+		//delay(1000);
+		
+		if(ngat_usart==1){
+			sprintf(minh_json, "%s", buff);
+			xu_ly_json(minh_json);
+			USART_Puts(USART1, minh_json);
+			for(i = 0; i < 200; i++){
+				buff[i] = '\0';
+			}
+			ngat_usart = 0;
+		}
+			
+			
+			
+//		HCSR_GetDistance(dis);
+//		while(dis[0] <= 25){
+//			HCSR_GetDistance(dis);
+//			so++;
+//			delay(10);
+//			TIM10->CCR1 = 0;
+//			TIM11->CCR1 = 0;
+//		}
+//	
+
+		//XuLyDataLine();
+
+	}
+}
+
+//huong0: 1:trai 0:tram		2:phai
+void TaskDMA(void* param){
+	USART_Puts(USART1, "dma");
+	for(;;){
+		if(xSemaphoreTake(semaphoret, ( TickType_t ) 100 ) == pdTRUE){
+			if(stop==0){
+				XuLyDataLine();
+				//rfid_read();
+			}
+			
+			//USART_Puts(USART1, "dma111\n");
+			
+			xSemaphoreGive( semaphoret );
+		}
+		else xSemaphoreGive( semaphoret );
+		vTaskDelay(pdMS_TO_TICKS(10));
+	}
+}
+void Task1(void* param){
+	UBaseType_t ux, dma, rfid;
+	USART_Puts(USART1, "usart");
+	for(;;){
+		char* msg1 = (char*)pvPortMalloc(50*sizeof(char));
+		char* msg2 = (char*)pvPortMalloc(50*sizeof(char));
+		char* msg3 = (char*)pvPortMalloc(50*sizeof(char));
+		if(xSemaphoreTake(semaphoret, ( TickType_t ) 100 ) == pdTRUE){
+			ux = uxTaskGetStackHighWaterMark(NULL);
+			dma = uxTaskGetStackHighWaterMark(DMA_Hdle);
+			rfid = uxTaskGetStackHighWaterMark(RFID_Hdle);
+			sprintf(msg1, "Day la cua usart: %ld\t\t\n", ux);
+			sprintf(msg2, "day la cua dma: %ld\t\t", dma);
+			sprintf(msg3, "%ld\n", rfid);
+		
+			USART_Puts(USART1, msg1);
+			USART_Puts(USART1, msg2);
+			USART_Puts(USART1, msg3);
+			
+			xSemaphoreGive( semaphoret );
+		}
+		else xSemaphoreGive( semaphoret );
+		vPortFree(msg1);
+		msg1 = NULL;
+		vPortFree(msg2);
+		msg2 = NULL;
+		vPortFree(msg3);
+		msg3 = NULL;
+		vTaskDelay(pdMS_TO_TICKS(200));
+	}
+}
+void TaskRFID(void* param){
+	USART_Puts(USART1, "rfid");
+	for(;;){
+		char* msg1 = (char*)pvPortMalloc(50*sizeof(char));
+		if(xSemaphoreTake(semaphoret, ( TickType_t ) 100 ) == pdTRUE){
+			filter();
+			//vTaskDelay(pdMS_TO_TICKS(50));
+//			HCSR_GetDistance(&dis);
+//			if(dis<20){
+//				stop = 1;
+//				TIM11->CCR1 = 0;
+//				TIM10->CCR1 = 0;
+//			}else stop = 0;
+//			//rfid_read();
+//			sprintf(msg1, "%d", dis);
+//			USART_Puts(USART1, msg1);
+			
+			xSemaphoreGive( semaphoret );
+		}
+		else xSemaphoreGive( semaphoret );
+		vPortFree(msg1);
+		msg1 = NULL;
+		vTaskDelay(pdMS_TO_TICKS(40));
+	}
+}
+void HuongRaHome(){
+
+//	if(bd_kt==78){	//batdau==7&&ketthuc==8
+//		huong0 = 2;
+//		//gap 1R
+//		if(strcmp(R1, buffer)==0){
+//			//Phai
+//			TIM11->CCR1 = 70;
+//			TIM10->CCR1 = 20;
+//			delay(2500);
+//		}
+//	}
+//	if(bd_kt==87){	//batdau==8&&ketthuc==7
+//		huong0 = 1;
+//		//gap 2L
+//		if(strcmp(R2, buffer)==0){
+//			//Trai
+//			TIM10->CCR1 = 70;
+//			TIM11->CCR1 = 20;
+//			delay(2500);
+//		}
+//	}
+//	if(bd_kt==910){	//batdau==9&&ketthuc==10
+//		huong0 = 1;
+//		//gap 1L
+//		if(strcmp(R1, buffer)==0){
+//			//Trai
+//			TIM10->CCR1 = 70;
+//			TIM11->CCR1 = 20;
+//			delay(2500);
+//		}
+//	}
+//	if(bd_kt==109){	//batdau==10&&ketthuc==9
+//		huong0 = 2;
+//		//gap 2R
+//		if(strcmp(R2, buffer)==0){
+//			//Phai
+//			TIM11->CCR1 = 70;
+//			TIM10->CCR1 = 20;
+//			delay(2500);
+//		}
+//		//DUNG TAI 10, DUNG TAI 9
+//	}
+//	if(bd_kt==7089010){	//(batdau==7||batdau==8) && (ketthuc==9||ketthuc==10)
+//		huong0 = 1;
+//		//gap 2L
+//		if(strcmp(R2, buffer)==0){
+//			//Trai
+//			TIM10->CCR1 = 70;
+//			TIM11->CCR1 = 20;
+//			delay(2500);
+//		}
+//	}
+//	if(bd_kt==9010708){	//(batdau==9||batdau==10) && (ketthuc==7||ketthuc==8)
+//		huong0 = 2;
+//		//gap 2R
+//		if(strcmp(R2, buffer)==0){
+//			//Phai
+//			TIM11->CCR1 = 70;
+//			TIM10->CCR1 = 20;
+//			delay(2500);
+//		}
+//	}
+	//DUNG TAI batdau lay hang
+//	if(strcmp(batdau, buffer)==0){
+//		TIM11->CCR1 = 0;
+//		TIM10->CCR1 = 0;
+//		delay(3000);
+//		TIM11->CCR1 = 130;
+//		TIM10->CCR1 = 130;
+//		bdRaKhoiHome=2;
+//	}
+	//DUNG TAI ketthuc tra hang
+//	if(strcmp(ketthuc, buffer)==0){
+//		TIM11->CCR1 = 0;
+//		TIM10->CCR1 = 0;
+//		stop=1;
+//	}
+	
+	if(bdRaKhoiHome==0){
+		if(huong0==1){
+			//thang
+			GPIOB->ODR |= 1<<14;
+			GPIOB->ODR &= ~(1<<13);
+			GPIOB->ODR |= 1<<12;
+			GPIOB->ODR &= ~(1<<11);
+			TIM10->CCR1 = 100;
+			TIM11->CCR1 = 100;
+			delay(1000);
+			//xoay phai
+			GPIOB->ODR |= 1<<14;
+			GPIOB->ODR &= ~(1<<13);
+			GPIOB->ODR |= 1<<11;
+			GPIOB->ODR &= ~(1<<12);
+			TIM10->CCR1 = 100;
+			TIM11->CCR1 = 100;
+			delay(1750);
+		}
+		else if(huong0==2){
+			//thang
+			GPIOB->ODR |= 1<<14;
+			GPIOB->ODR &= ~(1<<13);
+			GPIOB->ODR |= 1<<12;
+			GPIOB->ODR &= ~(1<<11);
+			TIM10->CCR1 = 100;
+			TIM11->CCR1 = 100;
+			delay(1000);
+			//xoay trai
+			GPIOB->ODR |= 1<<13;
+			GPIOB->ODR &= ~(1<<14);
+			GPIOB->ODR |= 1<<12;
+			GPIOB->ODR &= ~(1<<11);
+			TIM10->CCR1 = 100;
+			TIM11->CCR1 = 100;
+			delay(1750);
+			TIM10->CCR1 = 0;
+			TIM11->CCR1 = 0;
+			delay(3000);
+		}
+		bdRaKhoiHome = 1;
+	}
+
+}
+
+void HuongAUTO(){
+	//DUNG TAI batdau lay hang
+//	if(strcmp(batdau, buffer)==0){
+//		TIM11->CCR1 = 0;
+//		TIM10->CCR1 = 0;
+//		delay(3000);
+//		TIM11->CCR1 = 130;
+//		TIM10->CCR1 = 130;
+//		delay(2000);
+//	}
+	//DUNG TAI ketthuc tra hang
+//	if(strcmp(ketthuc, buffer)==0){
+//		TIM11->CCR1 = 0;
+//		TIM10->CCR1 = 0;
+//		delay(3000);
+//		TIM11->CCR1 = 130;
+//		TIM10->CCR1 = 130;
+//		delay(2000);
+//		stop=1;
+//	}
+	if(bd_kt==910||bd_kt==109){	//(batdau==9||batdau==10)&& (ketthuc==9||ketthuc==10)
+		if(huong0==2){
+			//2R
+//			if(strcmp(R2, buffer)==0||strcmp(R5, buffer)==0){
+//				//Phai
+//				TIM11->CCR1 = 70;
+//				TIM10->CCR1 = 20;
+//				delay(2500);
+//			}
+			//5R
+		}
+		if(huong0==1){
+			//1L
+//			if(strcmp(R1, buffer)==0||strcmp(R6, buffer)==0){
+//				//Trai
+//				TIM10->CCR1 = 70;
+//				TIM11->CCR1 = 20;
+//				delay(2500);
+//			}
+			//6L
+		}
+	}
+	if(bd_kt==78||bd_kt==87){	//(batdau==7||batdau==8)&& (ketthuc==7||ketthuc==8)
+		if(huong0==2){
+			//4R
+//			if(strcmp(R4, buffer)==0||strcmp(R1, buffer)==0){
+//				//Phai
+//				TIM11->CCR1 = 70;
+//				TIM10->CCR1 = 20;
+//				delay(2500);
+//			}
+			//1R
+		}
+		if(huong0==1){
+			//3L
+//			if(strcmp(R2, buffer)==0||strcmp(R3, buffer)==0){
+//				//Trai
+//				TIM10->CCR1 = 70;
+//				TIM11->CCR1 = 20;
+//				delay(2500);
+//			}
+			//2L
+		}
+	}
+	if(bd_kt==7089010){	//(batdau==7||batdau==8) && (ketthuc==9||ketthuc==10)
+		//4F
+		//5F
+	}
+	if(bd_kt==9010708){	//(batdau==9||batdau==10) && (ketthuc==7||ketthuc==8)
+		//3F
+		//6F
+	}
+}
+
+void HuongvaoHome(){
+//	if(huong0==1){
+//		if(strcmp(hientai,R7)==0||strcmp(hientai,R8)==0){	//hientai==7||hientai==8
+			//gap 3L
+//			if(strcmp(R3, buffer)==0){
+//				//Trai
+//				TIM10->CCR1 = 70;
+//				TIM11->CCR1 = 20;
+//				delay(2500);
+//			}
+//		}
+//		if(strcmp(hientai,R9)==0||strcmp(hientai,R10)==0){	//hientai==9||hientai==10
+			//gap 5R
+//			if(strcmp(R5, buffer)==0){
+//				//Phai
+//				TIM11->CCR1 = 70;
+//				TIM10->CCR1 = 20;
+//				delay(2500);
+//			}
+//		}
+		//gap 0 dung
+//		if(strcmp(R0, buffer)==0){
+//			TIM11->CCR1 = 0;
+//			TIM10->CCR1 = 0;
+//			stop=1;
+//			huong0 = 0;
+//		}
+//	}
+//	if(huong0==2){
+//		if(strcmp(hientai,R7)==0||strcmp(hientai,R8)==0){	//hientai==7||hientai==8
+			//gap 4R
+//			if(strcmp(R4, buffer)==0){
+//				//Phai
+//				TIM11->CCR1 = 70;
+//				TIM10->CCR1 = 20;
+//				delay(2500);
+//			}
+//		}
+//		if(strcmp(hientai,R9)==0||strcmp(hientai,R10)==0){	//hientai==9||hientai==10
+			//gap 6L
+//			if(strcmp(R6, buffer)==0){
+//				//Trai
+//				TIM10->CCR1 = 70;
+//				TIM11->CCR1 = 20;
+//				delay(2500);
+//			}
+//		}
+		//gap 0 dung
+//		if(strcmp(R0, buffer)==0){
+//			TIM11->CCR1 = 0;
+//			TIM10->CCR1 = 0;
+//			stop=1;
+//		}
+//	}
+}
+
+void Usart_Cofig(void){
+	GPIO_InitTypeDef gpio;
+	USART_InitTypeDef uart;
+	
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_USART1, ENABLE);
+	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOB, ENABLE);
+	
+	gpio.GPIO_Mode = GPIO_Mode_AF;
+	gpio.GPIO_OType = GPIO_OType_PP;
+	gpio.GPIO_Pin = GPIO_Pin_6|GPIO_Pin_7;
+	gpio.GPIO_PuPd = GPIO_PuPd_UP;
+	gpio.GPIO_Speed = GPIO_Speed_100MHz;
+	GPIO_Init(GPIOB, &gpio);
+	
+	GPIO_PinAFConfig(GPIOB, GPIO_PinSource6, GPIO_AF_USART1);
+	GPIO_PinAFConfig(GPIOB, GPIO_PinSource7, GPIO_AF_USART1);
+	
+	uart.USART_BaudRate = 115200;
+	uart.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+	uart.USART_Mode = USART_Mode_Tx|USART_Mode_Rx;
+	uart.USART_Parity = USART_Parity_No;
+	uart.USART_StopBits = USART_StopBits_1;
+	uart.USART_WordLength = USART_WordLength_8b;
+	USART_Init(USART1, &uart);
+	
+	USART_Cmd(USART1, ENABLE);
+	USART_ITConfig(USART1, USART_IT_RXNE, ENABLE);
+	NVIC_EnableIRQ(USART1_IRQn);
+}
+
+void USART_Puts(USART_TypeDef* USARTx, char* str) {
+
+    /* Go through entire string */
+    while (*str) {
+        /* Wait to be ready, buffer empty */
+        while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET){}
+        /* Send data */
+        USARTx->DR = (uint16_t)(*str++ & 0x01FF);
+        /* Wait to be ready, buffer empty */
+        while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET){}
+    }
+}
+
+void USART1_IRQHandler(void){
+	if(USART_GetITStatus(USART1, USART_IT_RXNE)){
+    receive = USART_ReceiveData(USART1);
+    USART_ClearITPendingBit(USART1,USART_IT_RXNE);
+		if(receive != '\n'){
+			//du lieu nhan tu esp32
+			buff[buff_index++] = receive;
+		}
+		else{
+			buff_index = 0;
+			ngat_usart = 1;
+	//    for(i = 0; i < 200 ; i++){
+	//      buff[i] = 0;
+	//    }
+		}
+  }
+}
+
+
+
+void send_json(unsigned int nd, unsigned int da, unsigned int tb2, unsigned int tb3, unsigned int soo){
+  char ND[50], DA[50], TB2[10], TB3[10], SO[10];
+  //unsigned int i;
+  sprintf(ND, "%d", nd);
+  sprintf(DA, "%d", da);
+  sprintf(TB2, "%d", tb2);
+  sprintf(TB3, "%d", tb3);
+  sprintf(SO, "%d", soo);
+  
+  strcat(temp_json, "{\"ND\":\"");
+  strcat(temp_json, ND);
+  strcat(temp_json,"\",");
+  strcat(temp_json, "\"DA\":\"");
+  strcat(temp_json, DA);
+  strcat(temp_json,"\",");
+  strcat(temp_json, "\"TB2\":\"");
+  strcat(temp_json, TB2);
+  strcat(temp_json,"\",");
+  strcat(temp_json, "\"TB3\":\"");
+  strcat(temp_json, TB3);
+  strcat(temp_json,"\",");
+  strcat(temp_json, "\"so lan\":\"");
+  strcat(temp_json, SO);
+  strcat(temp_json,"\"}");
+}
+
+void xu_ly_json(char* dataJson){
+	char tempbd[10] = "";
+	char tempkt[10] = "";
+	int dem = 0;
+	quan_ly_data = cJSON_Parse(dataJson);
+	
+  if(!quan_ly_data){
+//    printf("Json ERROR!!!!!\n");
+    return;
+  }
+  else{
+		sprintf(tempbd, "%s", cJSON_GetObjectItem(quan_ly_data,"Start")->valuestring);
+		sprintf(tempkt, "%s", cJSON_GetObjectItem(quan_ly_data,"End")->valuestring);
+		while(1){
+			if(strcmp("Tram 1", tempbd) == 0){
+				sprintf(batdau, "%s", R7);
+				dem = 70;
+				break;
+			}
+			else if(strcmp("Tram 2", tempbd) == 0){
+				sprintf(batdau, "%s", R8);
+				dem = 80;
+				break;
+			}
+			else if(strcmp("Tram 3", tempbd) == 0){
+				sprintf(batdau, "%s", R9);
+				dem = 90;
+				break;
+			}
+			else if(strcmp("Tram 4", tempbd) == 0){
+				sprintf(batdau, "%s", R10);
+				dem = 100;
+				break;
+			}
+		}
+		
+		while(1){
+			if(strcmp("Tram 1", tempkt) == 0){
+				sprintf(ketthuc, "%s", R7);
+				dem = dem + 7;
+				break;
+			}
+			else if(strcmp("Tram 2", tempkt) == 0){
+				sprintf(ketthuc, "%s", R8);
+				dem = dem + 8;
+				break;
+			}
+			else if(strcmp("Tram 3", tempkt) == 0){
+				sprintf(ketthuc, "%s", R9);
+				dem = dem + 9;
+				break;
+			}
+			else if(strcmp("Tram 4", tempkt) == 0){
+				sprintf(ketthuc, "%s", R10);
+				dem = dem + 10;
+				break;
+			}
+		}
+		
+		if(dem==78||dem==87||dem==109) bd_kt = dem;
+		else if(dem==100) bd_kt = 910;
+		else if(dem==79||dem==89||dem==80||dem==90) bd_kt = 7089010;
+		else if(dem==97||dem==107||dem==98||dem==108) bd_kt = 9010708;
+		//		USART_Puts(USART1, batdau);
+//		USART_Puts(USART1, ketthuc);
+    cJSON_Delete(quan_ly_data);
+  }
+
+}
+
+/*
+for(i = 500;i < 2500;++i){
+		//TIM4->CCR1 = i;
+		TIM4->CCR2 = i;	
+		//so++;
+		delay(2);
+	}		
+	for(i = 2500-1;i >= 500; --i){
+		//TIM4->CCR1 = i;
+		TIM4->CCR2 = i;	
+		//so++;
+		delay(2);
+	}		
+*/
+
+
+
+
+void delay(uint16_t timedl){
+	while(timedl){
+		TIM_SetCounter(TIM13, 0);
+		while(TIM_GetCounter(TIM13) < 1000){}
+		timedl--;
+	}
+}
+void delay_us(uint16_t timedlus){
+	while(timedlus){
+		TIM_SetCounter(TIM13, 0);
+		while(TIM_GetCounter(TIM13) < 1){}
+		timedlus--;
+	}
+}
+void TIMER13_Init(void){
+	TIM_TimeBaseInitTypeDef tim;
+	RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM13, ENABLE);
+	
+	tim.TIM_ClockDivision = TIM_CKD_DIV1;
+	tim.TIM_CounterMode = TIM_CounterMode_Up;
+	tim.TIM_Period = 10000 - 1;
+	tim.TIM_Prescaler = 84 - 1;
+	tim.TIM_RepetitionCounter = 0;
+	TIM_TimeBaseInit(TIM13, &tim);
+	TIM_Cmd(TIM13, ENABLE);
+}
+
+
+uint8_t CompareID(char* CardID, char* CompareIDs) {
+	uint8_t i;
+	for (i = 0; i < 5; i++) {
+		if (CardID[i] != CompareIDs[i]) 
+			{
+			return 1;
+		  }
+	}
+	return 0;
+}
+
+void Read64Block( void){
+ uint8_t k=0,p=0;
+ uint8_t  readdata[16];
+ uint8_t serNum[5];
+	  for(k=0;k<64;k++)			
+	    {		
+				 status = MFRC522_Request(PICC_REQALL, g_ucTempbuf);
+         if (status != MI_OK) continue;
+/*---------------------------------------------------*/				
+         status = MFRC522_Anticoll(serNum);
+         if (status != MI_OK) continue;
+/*----------------------------------------------------*/
+         status = MFRC522_Select(serNum);
+         if (status != MI_OK) continue;
+/*----------------------------------------------------*/
+         status = MFRC522_AuthState(PICC_AUTHENT1A, k, defaultKeyA,serNum);
+         if (status != MI_OK) continue;
+/*----------------------------------------------------*/	
+//         printf("block %d\r\n", k);	
+				 status = MFRC522_Read(k, readdata);
+                if (status == MI_OK)
+                {
+//									printf("hex= ");
+                  for(p=0; p<16; p++)
+                  {                  
+//									printf("%x ",readdata[p]);
+                  } 
+									/*
+//                  printf("\r\nsymbol= ");	    								
+                   for(p=0; p<16; p++)
+                  {                  
+//										printf("%c",readdata[p]);
+                  } 	
+									*/
+//                  printf("\r\n\r\n");									        
+                  MFRC522_Halt();
+              }
+       }
+//			printf("\n");
+
+}
+
+/*
+@Brief: Lay khoang cach hcsr04
+*/
+void HCSR_GetDistance(uint16_t* distance){
+	TIM4->CNT = 0;
+	TIM_Cmd(TIM4, ENABLE);
+	while(!TIM_GetFlagStatus(TIM4, TIM_FLAG_Update)){}
+	TIM_Cmd(TIM4, DISABLE);
+	TIM_ClearFlag(TIM4, TIM_FLAG_Update);
+	*distance = (TIM_GetCapture2(TIM4) - TIM_GetCapture1(TIM4))*0.0171;
+	//return (TIM_GetCapture2(TIM4) - TIM_GetCapture1(TIM4))*0.0171; //////mm=//=>cm=T*0.0177=(1s/58)
+		
+//	TIM3->CNT = 0;
+//	TIM_Cmd(TIM3, ENABLE);
+//	while(!TIM_GetFlagStatus(TIM3, TIM_FLAG_Update)){}
+//	TIM_Cmd(TIM3, DISABLE);
+//	TIM_ClearFlag(TIM3, TIM_FLAG_Update);
+//	distance[1] = (TIM_GetCapture2(TIM3) - TIM_GetCapture1(TIM3))*0.0171;
+	//return (TIM_GetCapture2(TIM4) - TIM_GetCapture1(TIM4))*0.0171; //////mm=//=>cm=T*0.0177=(1s/58)
+}
+
+/*
+@Brief: Cau hinh PWM and Input Capture of TIM4 (CH1-PD12, CH3-P14)
+*/
+void HCSR04_Init(void){
+	TIM_TimeBaseInitTypeDef hcsr04Tim;
+	TIM_OCInitTypeDef hcsr04OC;
+	TIM_ICInitTypeDef hcsr04IC;
+	GPIO_InitTypeDef hcsr04GPIO;
+	
+	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOD|RCC_AHB1Periph_GPIOA|RCC_AHB1Periph_GPIOB, ENABLE);
+	
+	//Triger - PD14 + Echo - PD12
+	hcsr04GPIO.GPIO_Mode = GPIO_Mode_AF;
+	hcsr04GPIO.GPIO_OType = GPIO_OType_PP;
+	hcsr04GPIO.GPIO_Pin = GPIO_Pin_12|GPIO_Pin_14;
+	hcsr04GPIO.GPIO_PuPd = GPIO_PuPd_NOPULL;
+	hcsr04GPIO.GPIO_Speed = GPIO_High_Speed;
+	GPIO_Init(GPIOD, &hcsr04GPIO);
+	
+	//Triger - PB0 + Echo - PA6
+//	hcsr04GPIO.GPIO_Mode = GPIO_Mode_AF;
+//	hcsr04GPIO.GPIO_OType = GPIO_OType_PP;
+//	hcsr04GPIO.GPIO_Pin = GPIO_Pin_6;
+//	hcsr04GPIO.GPIO_PuPd = GPIO_PuPd_NOPULL;
+//	hcsr04GPIO.GPIO_Speed = GPIO_High_Speed;
+//	GPIO_Init(GPIOA, &hcsr04GPIO);
+//	
+//	hcsr04GPIO.GPIO_Mode = GPIO_Mode_AF;
+//	hcsr04GPIO.GPIO_OType = GPIO_OType_PP;
+//	hcsr04GPIO.GPIO_Pin = GPIO_Pin_0;
+//	hcsr04GPIO.GPIO_PuPd = GPIO_PuPd_NOPULL;
+//	hcsr04GPIO.GPIO_Speed = GPIO_High_Speed;
+//	GPIO_Init(GPIOB, &hcsr04GPIO);
+	
+	GPIO_PinAFConfig(GPIOD, GPIO_PinSource14, GPIO_AF_TIM4);
+	GPIO_PinAFConfig(GPIOD, GPIO_PinSource12, GPIO_AF_TIM4);
+	
+//	GPIO_PinAFConfig(GPIOA, GPIO_PinSource6, GPIO_AF_TIM3);
+//	GPIO_PinAFConfig(GPIOB, GPIO_PinSource0, GPIO_AF_TIM3);
+	
+	RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM3|RCC_APB1Periph_TIM4, ENABLE);
+	
+	//TIM4
+	TIM_DeInit(TIM4);
+	
+	hcsr04Tim.TIM_Prescaler = 84 - 1;
+	hcsr04Tim.TIM_Period = 0xFFFF;
+	hcsr04Tim.TIM_ClockDivision = TIM_CKD_DIV1;
+	TIM_TimeBaseInit(TIM4, &hcsr04Tim);
+	
+	hcsr04OC.TIM_OCMode = TIM_OCMode_PWM1;
+	hcsr04OC.TIM_OCPolarity = TIM_OCPolarity_High;
+	hcsr04OC.TIM_Pulse = 15; //us
+	hcsr04OC.TIM_OutputState = TIM_OutputState_Enable;
+	TIM_OC3Init(TIM4, &hcsr04OC);
+	
+	
+	
+	hcsr04IC.TIM_Channel = TIM_Channel_1;
+	hcsr04IC.TIM_ICPolarity = TIM_ICPolarity_Rising;
+	hcsr04IC.TIM_ICSelection = TIM_ICSelection_DirectTI;
+	hcsr04IC.TIM_ICPrescaler = TIM_ICPSC_DIV1;
+	hcsr04IC.TIM_ICFilter = 0;
+	TIM_PWMIConfig(TIM4, &hcsr04IC);
+	
+	TIM_SelectInputTrigger(TIM4, TIM_TS_TI1FP1);
+	TIM_SelectMasterSlaveMode(TIM4, TIM_MasterSlaveMode_Enable);
+	
+	TIM_CtrlPWMOutputs(TIM4, ENABLE);
+	TIM_ClearFlag(TIM4, TIM_FLAG_Update);
+	
+	
+	//TIM3
+	TIM_DeInit(TIM3);
+	
+	hcsr04Tim.TIM_Prescaler = 84 - 1;
+	hcsr04Tim.TIM_Period = 0xFFFF;
+	hcsr04Tim.TIM_ClockDivision = TIM_CKD_DIV1;
+	TIM_TimeBaseInit(TIM3, &hcsr04Tim);
+	
+	hcsr04OC.TIM_OCMode = TIM_OCMode_PWM1;
+	hcsr04OC.TIM_OCPolarity = TIM_OCPolarity_High;
+	hcsr04OC.TIM_Pulse = 15; //us
+	hcsr04OC.TIM_OutputState = TIM_OutputState_Enable;
+	TIM_OC3Init(TIM3, &hcsr04OC);
+	
+	
+	
+	hcsr04IC.TIM_Channel = TIM_Channel_1;
+	hcsr04IC.TIM_ICPolarity = TIM_ICPolarity_Rising;
+	hcsr04IC.TIM_ICSelection = TIM_ICSelection_DirectTI;
+	hcsr04IC.TIM_ICPrescaler = TIM_ICPSC_DIV1;
+	hcsr04IC.TIM_ICFilter = 0;
+	TIM_PWMIConfig(TIM3, &hcsr04IC);
+	
+	TIM_SelectInputTrigger(TIM3, TIM_TS_TI1FP1);
+	TIM_SelectMasterSlaveMode(TIM3, TIM_MasterSlaveMode_Enable);
+	
+	TIM_CtrlPWMOutputs(TIM4, ENABLE);
+	TIM_ClearFlag(TIM3, TIM_FLAG_Update);
+	
+}
+
+/*
+@Brief: Cau hinh PWM of TIM8 (CH1-PC6, CH2-PC7)
+B15-T12			C6-7-8-9-T8
+*/
+void ROBOT_Init(void){
+	GPIO_InitTypeDef gpioInit;
+	TIM_TimeBaseInitTypeDef timInit;
+	TIM_OCInitTypeDef pwmInit;
+	
+//	/*TIM10 - PWM
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_TIM8, ENABLE);
+	timInit.TIM_Prescaler = 3360 - 1;
+	timInit.TIM_Period = 1000 - 1;
+	TIM_TimeBaseInit(TIM10, &timInit);
+	
+	pwmInit.TIM_OCMode = TIM_OCMode_PWM1;
+	pwmInit.TIM_OCPolarity = TIM_OCPolarity_High;
+	pwmInit.TIM_Pulse = 10;
+	pwmInit.TIM_OutputState = TIM_OutputState_Enable;
+	TIM_OC1Init(TIM10, &pwmInit);
+	
+	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOB, ENABLE);
+	
+	gpioInit.GPIO_Mode = GPIO_Mode_AF;
+	gpioInit.GPIO_OType = GPIO_OType_PP;
+	gpioInit.GPIO_Pin = GPIO_Pin_8;
+	gpioInit.GPIO_PuPd = GPIO_PuPd_NOPULL;
+	gpioInit.GPIO_Speed = GPIO_High_Speed;
+	GPIO_Init(GPIOB, &gpioInit);
+	
+	GPIO_PinAFConfig(GPIOB, GPIO_PinSource8, GPIO_AF_TIM10);
+	
+	TIM_Cmd(TIM10, ENABLE);
+	
+	
+
+	
+	/*TIM8-PWM*/
+//	RCC_APB2PeriphClockCmd(RCC_APB2Periph_TIM8, ENABLE);
+//	timInit.TIM_Prescaler = 168 - 1;
+//	timInit.TIM_Period = 10 - 1;
+//	TIM_TimeBaseInit(TIM8, &timInit);
+//	
+//	pwmInit.TIM_OCMode = TIM_OCMode_PWM1;
+//	pwmInit.TIM_OCPolarity = TIM_OCPolarity_High;
+//	pwmInit.TIM_Pulse = 2;
+//	pwmInit.TIM_OutputState = TIM_OutputState_Enable;
+//	TIM_OC1Init(TIM8, &pwmInit);
+//	
+//	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOC, ENABLE);
+//	
+//	gpioInit.GPIO_Mode = GPIO_Mode_AF;
+//	gpioInit.GPIO_OType = GPIO_OType_PP;
+//	gpioInit.GPIO_Pin = GPIO_Pin_6;
+//	gpioInit.GPIO_PuPd = GPIO_PuPd_NOPULL;
+//	gpioInit.GPIO_Speed = GPIO_High_Speed;
+//	GPIO_Init(GPIOC, &gpioInit);
+//	
+//	GPIO_PinAFConfig(GPIOC, GPIO_PinSource6, GPIO_AF_TIM8);
+//	
+//	TIM_Cmd(TIM8, ENABLE);
+//	TIM_CtrlPWMOutputs(TIM8, ENABLE);
+}
+
+/*
+@Brief: Cau hinh HSE external to 168MHz
+*/
+void RCC_Setup(void){
+	ErrorStatus HSEStartUpStatus;
+	
+	/* RCC system reset(for debug purpose) */
+	RCC_DeInit();
+	
+	 /* Enable HSE */
+	RCC_HSEConfig(RCC_HSE_ON);
+	
+	/* Wait till HSE is ready */
+	HSEStartUpStatus = RCC_WaitForHSEStartUp();
+	
+	while(HSEStartUpStatus != SUCCESS){
+		HSEStartUpStatus = RCC_WaitForHSEStartUp();
+	}
+	
+	if(HSEStartUpStatus == SUCCESS){
+		/* Enable Prefetch Buffer */
+		FLASH_PrefetchBufferCmd(ENABLE);
+		
+		/* Flash 5 wait state */
+		FLASH_SetLatency(FLASH_Latency_5);
+		
+		/* HCLK = SYSCLK */
+		RCC_HCLKConfig(RCC_SYSCLK_Div1);
+		
+		/*PCLK2 = HCLK/2*/
+		RCC_PCLK2Config(RCC_HCLK_Div2);
+		
+		/*PCLK1 = HCLK/4*/
+		RCC_PCLK1Config(RCC_HCLK_Div4);
+		
+		/*PLLCLK = 168MHz*/
+		RCC_PLLConfig(RCC_PLLSource_HSE, 4, 168, 2, 4);
+		
+		/*Enable PLL*/
+		RCC_PLLCmd(ENABLE);
+		
+		/* Wait till PLL is ready */
+		while(RCC_GetFlagStatus(RCC_FLAG_PLLRDY) == RESET){}
+		
+		/* Select PLL as system clock source */			
+		RCC_SYSCLKConfig(RCC_SYSCLKSource_PLLCLK);
+		
+		/* Wait till PLL is used as system clock source */
+    while(RCC_GetSYSCLKSource() != 0x08) {}
+	}
+	
+}
+	
+
+//END OF FILE//
+void Motor_Init(void){
+	uint16_t PrescalerValue = (uint16_t) 16800-1;
+	GPIO_InitTypeDef            GPIO_InitStructure;
+	TIM_TimeBaseInitTypeDef     TIM_TimeBaseStructure;
+	TIM_OCInitTypeDef           TIM_OCInitStructure;
+	
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_TIM10|RCC_APB2Periph_TIM11, ENABLE);
+
+	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOB, ENABLE);
+	
+	GPIO_InitStructure.GPIO_Pin     = GPIO_Pin_8 | GPIO_Pin_9;
+	GPIO_InitStructure.GPIO_Mode    = GPIO_Mode_AF;
+	GPIO_InitStructure.GPIO_Speed   = GPIO_Speed_50MHz;
+	GPIO_InitStructure.GPIO_OType   = GPIO_OType_PP;
+	GPIO_InitStructure.GPIO_PuPd    = GPIO_PuPd_UP;
+	GPIO_Init(GPIOB, &GPIO_InitStructure);
+	
+	
+	
+
+	GPIO_PinAFConfig(GPIOB, GPIO_PinSource8, GPIO_AF_TIM10);
+	GPIO_PinAFConfig(GPIOB, GPIO_PinSource9, GPIO_AF_TIM11);
+	
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_11|GPIO_Pin_12|GPIO_Pin_13|GPIO_Pin_14;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;
+	GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;
+	GPIO_InitStructure.GPIO_Speed = GPIO_High_Speed;
+	GPIO_Init(GPIOB, &GPIO_InitStructure);
+	
+	GPIOB->ODR |= 1<<14;
+	GPIOB->ODR &= ~(1<<13);
+	GPIOB->ODR |= 1<<12;
+	GPIOB->ODR &= ~(1<<11);
+	/*
+	* 84M / TIM_Prescaler = 1M
+	* 1M / TIM_ClockDivision = 1M
+	* 1M / (TIM_Period + 1) = 50Hz (20ms)
+	* TIM_Pulse = 500(us) ~ 2500(us)
+	*/
+
+
+	TIM_TimeBaseStructure.TIM_Period        = 1000-1;
+	TIM_TimeBaseStructure.TIM_Prescaler     = PrescalerValue;
+	TIM_TimeBaseStructure.TIM_ClockDivision = TIM_CKD_DIV1;//0;
+	TIM_TimeBaseStructure.TIM_CounterMode   = TIM_CounterMode_Up;
+
+	TIM_TimeBaseInit(TIM10, &TIM_TimeBaseStructure);
+
+	TIM_TimeBaseInit(TIM11, &TIM_TimeBaseStructure);
+	
+	TIM_OCInitStructure.TIM_OCMode      = TIM_OCMode_PWM1;
+	TIM_OCInitStructure.TIM_OutputState = TIM_OutputState_Enable;
+	TIM_OCInitStructure.TIM_Pulse       = 0; 
+	TIM_OCInitStructure.TIM_OCPolarity  = TIM_OCPolarity_High;
+
+	TIM_OC1Init(TIM10, &TIM_OCInitStructure);
+	TIM_OC1PreloadConfig(TIM10, TIM_OCPreload_Enable);
+
+	TIM_OC1Init(TIM11, &TIM_OCInitStructure);
+	TIM_OC1PreloadConfig(TIM11, TIM_OCPreload_Enable);
+
+	TIM_ARRPreloadConfig(TIM10, ENABLE);
+	TIM_ARRPreloadConfig(TIM11, ENABLE);
+
+	TIM_Cmd(TIM10, ENABLE);
+	TIM_Cmd(TIM11, ENABLE);
+}
+
+/*
+
+*/
+
+/*
+
+
+
+*/
+

@@ -1,0 +1,26 @@
+--cpu=Cortex-M4.fp.sp
+".\objects\misc.o"
+".\objects\stm32f4xx_adc.o"
+".\objects\stm32f4xx_dma.o"
+".\objects\stm32f4xx_gpio.o"
+".\objects\startup_stm32f40xx.o"
+".\objects\stm32f4xx_i2c.o"
+".\objects\stm32f4xx_rcc.o"
+".\objects\stm32f4xx_spi.o"
+".\objects\stm32f4xx_tim.o"
+".\objects\stm32f4xx_usart.o"
+".\objects\stm32f4xx_flash.o"
+".\objects\stm32f4xx_sdio.o"
+".\objects\system_stm32f4xx.o"
+".\objects\main.o"
+".\objects\mfrc522.o"
+".\objects\cjson.o"
+".\objects\cjson_utils.o"
+".\objects\filter.o"
+".\objects\tm_stm32f4_gpio.o"
+".\objects\tm_stm32f4_servo.o"
+".\objects\tm_stm32f4_timer_properties.o"
+".\objects\tm_stm32f4_pwm.o"
+--ro-base 0x08000000 --entry 0x08000000 --rw-base 0x20000000 --entry Reset_Handler --first __Vectors --strict --summary_stderr --info summarysizes --map --load_addr_map_info --xref --callgraph --symbols
+--info sizes --info totals --info unused --info veneers
+--list ".\Listings\STM32F407VET6.map" -o .\Objects\STM32F407VET6.axf
