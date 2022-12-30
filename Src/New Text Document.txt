@@ -1,0 +1,41 @@
+static int counter = 0;
+// To Get Current Count
+int GETVAL(void){
+	 return SysTick->VAL;
+}
+
+// To account for Multiple Cycles of Timer
+// for more than the period of the timer
+void SysTick_Handler(void)
+{
+	counter++;
+}
+
+
+// Timer Start Function
+// when called the timer starts counting
+void Timer_start_func(void){
+	  SysTick->LOAD  = 168000 - 1;                                  /* set reload register */
+	  NVIC_SetPriority (SysTick_IRQn, (1<<__NVIC_PRIO_BITS) - 1);  /* set Priority for Systick Interrupt */
+	  SysTick->VAL   = 0;                                          /* Load the SysTick Counter Value */
+	  SysTick->CTRL  = SysTick_CTRL_CLKSOURCE_Msk |
+	                   SysTick_CTRL_TICKINT_Msk   |
+	                   SysTick_CTRL_ENABLE_Msk;
+}
+
+// Timer Count End Function
+// when called the timer stops counting
+void Timer_end_func(void){
+	 SysTick->CTRL  = 0;
+	 counter=0;
+}
+
+
+
+
+//		getvall = GETVAL();
+//	tm = 1 - getvall/168000 + counter;
+//	if(tm-tc>1000){
+//		so++;
+//		tc = tm;
+//	}
